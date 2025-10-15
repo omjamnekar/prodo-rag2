@@ -6,11 +6,6 @@ from piplines.rag_pipeline import process_rag, index_repo, reset_repo
 import traceback
 import asyncio
 
-try:
-    from absl import logging as absl_logging
-    absl_logging.set_verbosity(absl_logging.INFO)
-except ImportError:
-    pass
 
 load_dotenv()
 app = Flask(__name__)
