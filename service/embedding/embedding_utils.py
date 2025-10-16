@@ -17,7 +17,7 @@ def _get_model_session_and_tokenizer():
     global _model_session, _tokenizer
 
     if _model_session is None:
-        model_path = os.getenv("ONNX_MODEL_PATH", "embedding/model.onnx")
+        model_path = os.getenv("ONNX_MODEL_PATH", "service/embedding/model.onnx")
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"ONNX model not found at {model_path}")
         _model_session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
