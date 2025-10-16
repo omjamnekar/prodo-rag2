@@ -4,12 +4,30 @@ import numpy as np
 from dotenv import load_dotenv
 from flask import request, jsonify
 from service.piplines.rag_pipeline import process_rag, index_repo, reset_repo
+from service.worker.worker import IndexWorker
+from service.cache.query_cache import TTLCache
+import hashlib
 import traceback
 import asyncio
+from threading import Semaphore
 
 
 load_dotenv()
 app = Flask(__name__)
+
+# Limit concurrent heavy requests to avoid memory spikes. Default 2 concurrent.
+MAX_CONCURRENCY = int(os.environ.get('MAX_CONCURRENCY', '2'))
+_semaphore = Semaphore(MAX_CONCURRENCY)
+
+# optional background worker
+_background_index = os.environ.get('BACKGROUND_INDEX', 'false').lower() in ('1', 'true', 'yes')
+_worker: IndexWorker | None = None
+if _background_index:
+    _worker = IndexWorker(num_workers=int(os.environ.get('INDEX_WORKERS', '1')))
+    _worker.start()
+
+# query cache
+_query_cache = TTLCache(ttl_seconds=int(os.environ.get('QUERY_CACHE_TTL', '300')), max_items=int(os.environ.get('QUERY_CACHE_ITEMS', '1024')))
 
 def convert_ndarray_to_list(obj):
     if isinstance(obj, np.ndarray):
@@ -48,16 +66,34 @@ def parse_query_request(data):
 @app.route('/rag/query', methods=['POST'])
 def rag_query():
     try:
+        # try to acquire semaphore quickly (avoid waiting indefinitely)
+        acquired = _semaphore.acquire(timeout=0.5)
+        if not acquired:
+            return jsonify({"error": "Too many concurrent requests"}), 429
         data = request.get_json(force=True)
         req = parse_query_request(data)
         # Call async function from sync Flask
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            result = loop.run_until_complete(process_rag(req["repoId"], req["prompt"], req["top_k"], req["metadata"]))
+            # check query cache
+            cache_key = hashlib.sha256((req["repoId"] + '||' + req["prompt"] + '||' + str(req["top_k"])).encode('utf-8')).hexdigest()
+            cached = _query_cache.get(cache_key)
+            if cached:
+                result = cached
+            else:
+                result = loop.run_until_complete(process_rag(req["repoId"], req["prompt"], req["top_k"], req["metadata"]))
+                try:
+                    _query_cache.set(cache_key, result)
+                except Exception:
+                    pass
             safe_result = convert_ndarray_to_list(result)
             return jsonify(safe_result)
         finally:
+            try:
+                _semaphore.release()
+            except Exception:
+                pass
             loop.close()
     except Exception as e:
         print("Error in /rag/query:", e, flush=True)
@@ -68,6 +104,9 @@ def rag_query():
 @app.route('/rag/reset', methods=['POST'])
 def rag_reset():
     try:
+        acquired = _semaphore.acquire(timeout=0.5)
+        if not acquired:
+            return jsonify({"error": "Too many concurrent requests"}), 429
         data = request.get_json(force=True)
         req = parse_index_request(data)
         repo_id = req.get('repoId')
@@ -83,6 +122,10 @@ def rag_reset():
             result = loop.run_until_complete(reset_repo(repo_id, files, metadata)) # type: ignore
             return jsonify({"status": "reset", "repoId": repo_id, "result": result})
         finally:
+            try:
+                _semaphore.release()
+            except Exception:
+                pass
             loop.close()
     except Exception as e:
         tb = traceback.format_exc()
@@ -118,6 +161,9 @@ def health():
 @app.route('/rag/index', methods=['POST'])
 def index_repo_call():
     try:
+        acquired = _semaphore.acquire(timeout=0.5)
+        if not acquired:
+            return jsonify({"error": "Too many concurrent requests"}), 429
         data = request.get_json(force=True)
         print(f"Received data for /rag/index: {data}", flush=True)
         req = parse_index_request(data)
@@ -128,6 +174,17 @@ def index_repo_call():
         if not repo_id or not files or not isinstance(files, list):
             raise ValueError("Missing or invalid repoId/files in request.")
 
+        # If background indexing is enabled, enqueue and return job id
+        if _worker:
+            try:
+                job_id = _worker.submit(repo_id, files, metadata)
+                return jsonify({"success": True, "job_id": job_id, "background": True})
+            finally:
+                try:
+                    _semaphore.release()
+                except Exception:
+                    pass
+
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
@@ -135,6 +192,10 @@ def index_repo_call():
             print(f"Indexing result for repoId {repo_id}: {result}", flush=True)
             return jsonify({"success": True, "result": result})
         finally:
+            try:
+                _semaphore.release()
+            except Exception:
+                pass
             loop.close()
     except Exception as e:
         tb = traceback.format_exc()

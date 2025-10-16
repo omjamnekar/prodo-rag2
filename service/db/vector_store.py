@@ -71,4 +71,9 @@ def query_vectors(query_vec, top_k=6, namespace: str | None = None):
 
 # Delete all vectors in a namespace
 def delete_namespace(namespace: str):
-    _index.delete(delete_all=True, namespace=namespace)
+    try:
+        _index.delete(delete_all=True, namespace=namespace)
+        return {"deleted": True, "namespace": namespace}
+    except Exception as e:
+        # Don't raise - return structured info so callers can handle non-existent namespaces gracefully
+        return {"deleted": False, "namespace": namespace, "error": str(e)}

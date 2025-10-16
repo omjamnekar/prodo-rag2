@@ -1,58 +1,102 @@
 import os
-from dotenv import load_dotenv
+import time
+import gc
 from typing import List
-import numpy as np
+
 import onnxruntime as ort
 from transformers import AutoTokenizer
 
-# Load environment variables
-load_dotenv()
+from service.utils.log import get_logger
+from service.embedding.cache import EmbeddingCache
+from service.utils.retry import retry
 
-# Global variables for lazy loading
-_model_session = None
+logger = get_logger(__name__)
+
+_session = None
 _tokenizer = None
 
-def _get_model_session_and_tokenizer():
-    """Lazy-load ONNX model and tokenizer."""
-    global _model_session, _tokenizer
+# simple in-memory + disk cache for embeddings
+_cache = EmbeddingCache(max_memory_items=int(os.environ.get('EMBEDDING_CACHE_ITEMS', '4096')), disk_path=os.path.join(os.getcwd(), 'data', 'embed_cache'))
 
-    if _model_session is None:
-        model_path = os.getenv("ONNX_MODEL_PATH", "service/embedding/model.onnx")
+
+def _get_model_session_and_tokenizer():
+    global _session, _tokenizer
+    if _session is None:
+        model_path = os.getenv('ONNX_MODEL_PATH', 'service/embedding/model.onnx')
         if not os.path.exists(model_path):
-            raise FileNotFoundError(f"ONNX model not found at {model_path}")
-        _model_session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
+            raise FileNotFoundError(f'ONNX model not found at {model_path}')
+        _session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
 
     if _tokenizer is None:
-        model_name = os.getenv("MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2")
+        model_name = os.getenv('MODEL_NAME', 'sentence-transformers/all-MiniLM-L6-v2')
         _tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    return _model_session, _tokenizer
+    return _session, _tokenizer
 
 
-async def get_embeddings(texts: List[str]) -> List[np.ndarray]:
-    """Generate embeddings using ONNX Runtime."""
-    model, tokenizer = _get_model_session_and_tokenizer()
+async def get_embeddings(texts: List[str]) -> List[List[float]]:
+    """Compute embeddings for a list of texts.
 
-    if isinstance(texts, str):
-        texts = [texts]
+    Uses an in-memory LRU + disk cache. Returns a list of float lists, one per input text.
+    """
+    if not isinstance(texts, list):
+        raise ValueError('texts must be a list of strings')
 
-    # Tokenize inputs
-    inputs = tokenizer(texts, padding=True, truncation=True, return_tensors="np")
-    input_ids = inputs["input_ids"]
-    attention_mask = inputs["attention_mask"]
+    t0 = time.time()
+    results: List[List[float]] = [None] * len(texts)  # type: ignore
+    to_compute: List[tuple] = []
 
-    # Run inference
-    outputs = model.run(None, {
-        "input_ids": input_ids,
-        "attention_mask": attention_mask
-    })
+    # check cache first
+    for i, txt in enumerate(texts):
+        v = _cache.get(txt)
+        if v is not None:
+            results[i] = v
+        else:
+            to_compute.append((i, txt))
 
-    embeddings = outputs[0]
+    if to_compute:
+        sess, tokenizer = _get_model_session_and_tokenizer()
+        batch_texts = [t for _, t in to_compute]
+        enc = tokenizer(batch_texts, padding=True, truncation=True, return_tensors='np')
 
-    # Mean pooling over token embeddings
-    attention_mask_expanded = np.expand_dims(attention_mask, axis=-1)
-    sum_embeddings = np.sum(embeddings * attention_mask_expanded, axis=1)
-    sum_mask = np.clip(attention_mask_expanded.sum(axis=1), a_min=1e-9, a_max=None)
-    mean_pooled = sum_embeddings / sum_mask
+        @retry((Exception,), tries=2, delay=0.5, backoff=2.0)
+        def run_session(session, ort_inputs):
+            return session.run(None, ort_inputs)
 
-    return mean_pooled
+        ort_inputs = {k: v for k, v in enc.items()}
+        outputs = run_session(sess, ort_inputs)
+        seq_emb = outputs[0]
+
+        attention_mask = enc.get('attention_mask')
+        if attention_mask is not None:
+            mask = attention_mask.astype('float32')
+            summed = (seq_emb * mask[:, :, None]).sum(axis=1)
+            denom = mask.sum(axis=1)[:, None]
+            embeddings = (summed / denom).astype('float32')
+        else:
+            embeddings = seq_emb.mean(axis=1).astype('float32')
+
+        emb_lists = embeddings.tolist()
+
+        for (idx, _), emb in zip(to_compute, emb_lists):
+            results[idx] = emb
+            try:
+                _cache.set(texts[idx], emb)
+            except Exception:
+                pass
+
+        # free big temporaries
+        try:
+            del outputs, seq_emb, enc, ort_inputs, embeddings, emb_lists
+        except Exception:
+            pass
+        gc.collect()
+
+    # ensure all entries are filled (should be), coerce to lists
+    for i in range(len(results)):
+        if results[i] is None:
+            results[i] = []
+
+    d = time.time() - t0
+    logger.debug(f'get_embeddings time={d:.3f}s for {len(texts)} texts (computed={len(to_compute)})')
+    return results

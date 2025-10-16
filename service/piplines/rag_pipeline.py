@@ -56,7 +56,15 @@ async def index_repo(repo_id: str, files: List[Dict[str, str]], metadata: Dict[s
     for c, emb in zip(chunks, embeddings):
         # Flatten metadata: merge chunk metadata and top-level metadata, stringify all values
         flat_metadata = {k: str(v) for k, v in {**{k: v for k,v in c.items() if k not in ('text', 'metadata')}, **metadata}.items()}
-        vectors.append((c['id'], emb.tolist(), flat_metadata))
+        # coerce to plain python list if it's a numpy array or similar
+        if isinstance(emb, list):
+            safe_emb = emb
+        else:
+            try:
+                safe_emb = list(emb)
+            except Exception:
+                safe_emb = emb
+        vectors.append((c['id'], safe_emb, flat_metadata))
         logger.info(f"Vector created for chunk ID: {c['id']}")
 
     # --- Merge with existing index ---
@@ -81,6 +89,19 @@ async def index_repo(repo_id: str, files: List[Dict[str, str]], metadata: Dict[s
     save_index_metadata(repo_id, {'file_count': len(files), 'chunk_count': len(chunks), 'metadata': metadata})
 
     # Return summary
+    # free large intermediates to reduce memory footprint
+    try:
+        del embeddings
+        del vectors
+        del chunks
+        del merged_vectors
+        del existing
+        del existing_dict
+    except Exception:
+        pass
+    import gc
+    gc.collect()
+
     return {
         'repo_id': repo_id,
         'file_count': len(files),
@@ -93,8 +114,11 @@ async def index_repo(repo_id: str, files: List[Dict[str, str]], metadata: Dict[s
 async def process_rag(repo_id: str, prompt: str, top_k: int = 6, metadata: Dict[str, Any]={}) -> Dict[str, Any]:
     # 1. embed prompt
     query_emb = (await get_embeddings([prompt]))[0]
-    if hasattr(query_emb, 'tolist'):
-        query_emb = query_emb.tolist()
+    if not isinstance(query_emb, list):
+        try:
+            query_emb = list(query_emb)
+        except Exception:
+            pass
 
     # 2. retrieve top chunks
     results = query_vectors(query_emb, top_k=top_k, namespace=repo_id)
@@ -164,6 +188,12 @@ async def reset_repo(repo_id: str, files: List[Dict[str, str]] | None = None, me
 
 async def delete_repo(repo_id: str):
     """Delete all vectors for the given repo namespace."""
-    delete_namespace(repo_id)
+    try:
+        res = delete_namespace(repo_id)
+    except Exception as e:
+        return {'status': 'error', 'repo_id': repo_id, 'error': str(e)}
     # optionally remove metadata from DB (not implemented here)
-    return {'status': 'deleted', 'repo_id': repo_id}
+    if isinstance(res, dict) and res.get('deleted'):
+        return {'status': 'deleted', 'repo_id': repo_id}
+    else:
+        return {'status': 'not-deleted', 'repo_id': repo_id, 'info': res}
