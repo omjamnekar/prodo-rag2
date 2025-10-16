@@ -41,7 +41,12 @@ class TestMainRoutes(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
 
     def test_rag_reset(self):
-        response = self.app.delete('/rag/reset?repoId=test-repo')
+        payload = {
+            "repoId": "test-repo",
+            "files": [],
+            "metadata": {}
+        }
+        response = self.app.post('/rag/reset', json=payload)
         self.assertEqual(response.status_code, 200)
 
     def test_delete_repo_vectors(self):

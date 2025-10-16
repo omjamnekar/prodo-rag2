@@ -6,6 +6,11 @@ from flask import request, jsonify
 from service.piplines.rag_pipeline import process_rag, index_repo, reset_repo
 from service.worker.worker import IndexWorker
 from service.cache.query_cache import TTLCache
+import atexit
+
+# import shutdown helpers (optional)
+from service.embedding import embedding_utils
+from service.db import vector_store, database
 import hashlib
 import traceback
 import asyncio
@@ -25,6 +30,32 @@ _worker: IndexWorker | None = None
 if _background_index:
     _worker = IndexWorker(num_workers=int(os.environ.get('INDEX_WORKERS', '1')))
     _worker.start()
+
+
+def _graceful_shutdown():
+    # stop background worker if running
+    try:
+        if _worker is not None:
+            _worker.stop()
+    except Exception:
+        pass
+    # try to free heavy resources
+    try:
+        embedding_utils.shutdown()
+    except Exception:
+        pass
+    try:
+        vector_store.shutdown()
+    except Exception:
+        pass
+    try:
+        database.shutdown()
+    except Exception:
+        pass
+
+
+# Register for process exit
+atexit.register(_graceful_shutdown)
 
 # query cache
 _query_cache = TTLCache(ttl_seconds=int(os.environ.get('QUERY_CACHE_TTL', '300')), max_items=int(os.environ.get('QUERY_CACHE_ITEMS', '1024')))
