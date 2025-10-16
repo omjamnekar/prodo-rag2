@@ -3,7 +3,7 @@ import os
 import numpy as np
 from dotenv import load_dotenv
 from flask import request, jsonify
-from piplines.rag_pipeline import process_rag, index_repo, reset_repo
+from service.piplines.rag_pipeline import process_rag, index_repo, reset_repo
 import traceback
 import asyncio
 

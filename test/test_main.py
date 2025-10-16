@@ -44,9 +44,9 @@ class TestMainRoutes(unittest.TestCase):
         response = self.app.delete('/rag/reset?repoId=test-repo')
         self.assertEqual(response.status_code, 200)
 
-    # def test_delete_repo_vectors(self):
-    #     response = self.app.delete('/rag/delete?repoId=test-repo')
-    #     self.assertEqual(response.status_code, 200)
+    def test_delete_repo_vectors(self):
+        response = self.app.delete('/rag/delete?repoId=test-repo')
+        self.assertEqual(response.status_code, 200)
 
 
 if __name__ == '__main__':

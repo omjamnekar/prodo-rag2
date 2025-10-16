@@ -1,12 +1,11 @@
 import os
 
 from typing import List, Dict, Any
-from embedding.embedding_utils import get_embeddings
-from db.vector_store import upsert_vectors, query_vectors, delete_namespace
-from llm.model_utils import generate_from_gemini
-from db.database import save_index_metadata, save_query_log
-from db.vector_store import query_vectors, upsert_vectors
-from utils.log import get_logger
+from service.embedding.embedding_utils import get_embeddings
+from service.db.vector_store import upsert_vectors, query_vectors, delete_namespace
+from service.llm.model_utils import generate_from_gemini
+from service.db.database import save_index_metadata, save_query_log
+from service.utils.log import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
