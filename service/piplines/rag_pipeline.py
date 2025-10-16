@@ -81,6 +81,19 @@ async def index_repo(repo_id: str, files: List[Dict[str, str]], metadata: Dict[s
     save_index_metadata(repo_id, {'file_count': len(files), 'chunk_count': len(chunks), 'metadata': metadata})
 
     # Return summary
+    # free large intermediates to reduce memory footprint
+    try:
+        del embeddings
+        del vectors
+        del chunks
+        del merged_vectors
+        del existing
+        del existing_dict
+    except Exception:
+        pass
+    import gc
+    gc.collect()
+
     return {
         'repo_id': repo_id,
         'file_count': len(files),
