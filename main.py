@@ -1,4 +1,5 @@
 from flask import Flask
+import os
 import numpy as np
 from dotenv import load_dotenv
 from flask import request, jsonify
@@ -137,4 +138,7 @@ def home():
     return "Hello, PRODO RAG on Vercel!"
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    # Bind to 0.0.0.0 and use the PORT environment variable so hosting platforms (Render, Vercel)
+    # can detect the open port. Default to 8080 if not provided.
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
