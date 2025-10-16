@@ -150,5 +150,5 @@ def home():
 if __name__ == '__main__':
     # Bind to 0.0.0.0 and use the PORT environment variable so hosting platforms (Render, Vercel)
     # can detect the open port. Default to 8080 if not provided.
-    port = int(os.environ.get('PORT', 8080))
+    port = int(os.environ.get('PORT', 8002))
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
