@@ -3,6 +3,7 @@ import queue
 import time
 import uuid
 import logging
+import inspect
 from typing import Optional
 
 from service.piplines.rag_pipeline import index_repo
@@ -31,8 +32,15 @@ class IndexWorker:
     def stop(self):
         self.running = False
         # put None sentinel for each thread
-        for _ in self.threads:
+        for _ in range(len(self.threads)):
             self.q.put(None)
+        # join threads to ensure clean shutdown
+        for t in self.threads:
+            try:
+                if t.is_alive():
+                    t.join(timeout=5)
+            except Exception:
+                pass
 
     def submit(self, repo_id: str, files, metadata=None) -> str:
         job_id = str(uuid.uuid4())
@@ -54,18 +62,36 @@ class IndexWorker:
             if item is None:
                 break
             job_id, repo_id, files, metadata = item
-            self.status[job_id]['status'] = 'running'
             try:
                 # call index_repo (async) from sync thread
                 import asyncio
+                from functools import partial
                 loop = asyncio.new_event_loop()
                 try:
-                    res = loop.run_until_complete(index_repo(repo_id, files, metadata or {}))
+                    # support both async and sync implementations of index_repo:
+                    if inspect.iscoroutinefunction(index_repo):
+                        coro = index_repo(repo_id, files, metadata or {})
+                        res = loop.run_until_complete(coro)
+                    else:
+                        # run synchronous index_repo in a thread executor so run_until_complete
+                        # always receives an awaitable
+                        func = partial(index_repo, repo_id, files, metadata or {})
+                        res = loop.run_until_complete(loop.run_in_executor(None, func))
                 finally:
-                    loop.close()
+                    try:
+                        loop.stop()
+                    except Exception:
+                        pass
+                    try:
+                        loop.close()
+                    except Exception:
+                        pass
+                        pass
                 self.status[job_id]['status'] = 'completed'
                 self.status[job_id]['result'] = res
                 try:
+                    if inspect.iscoroutine(res):
+                        res = loop.run_until_complete(res)
                     database.update_index_job_result(job_id, res)
                 except Exception:
                     pass
@@ -77,3 +103,5 @@ class IndexWorker:
                     database.update_index_job_error(job_id, str(e))
                 except Exception:
                     pass
+        # worker exiting, attempt to persist or cleanup if needed
+        logger.info('IndexWorker threads exiting')

@@ -59,11 +59,15 @@ async def get_embeddings(texts: List[str]) -> List[List[float]]:
         batch_texts = [t for _, t in to_compute]
         enc = tokenizer(batch_texts, padding=True, truncation=True, return_tensors='np')
 
+        # Filter out unsupported inputs (e.g., token_type_ids)
+        supported_inputs = set(sess.get_inputs()[i].name for i in range(len(sess.get_inputs())))
+        ort_inputs = {k: v for k, v in enc.items() if k in supported_inputs}
+
         @retry((Exception,), tries=2, delay=0.5, backoff=2.0)
         def run_session(session, ort_inputs):
             return session.run(None, ort_inputs)
 
-        ort_inputs = {k: v for k, v in enc.items()}
+        ort_inputs = {k: v for k, v in enc.items() if k in supported_inputs}
         outputs = run_session(sess, ort_inputs)
         seq_emb = outputs[0]
 
@@ -100,3 +104,29 @@ async def get_embeddings(texts: List[str]) -> List[List[float]]:
     d = time.time() - t0
     logger.debug(f'get_embeddings time={d:.3f}s for {len(texts)} texts (computed={len(to_compute)})')
     return results
+
+
+def shutdown():
+    """Release references to heavy objects used by the embedding pipeline.
+
+    This attempts to drop the ONNX session and tokenizer references so the
+    interpreter can free memory. Call during process shutdown or when you
+    want to free up memory after large indexing runs.
+    """
+    global _session, _tokenizer, _cache
+    try:
+        _session = None
+    except Exception:
+        pass
+    try:
+        _tokenizer = None
+    except Exception:
+        pass
+    try:
+        # clear in-memory LRU if present
+        if _cache is not None and hasattr(_cache, 'mem') and getattr(_cache.mem, 'cache', None) is not None:
+            _cache.mem.cache.clear()
+    except Exception:
+        pass
+    gc.collect()
+    logger.info('embedding_utils: shutdown complete')
