@@ -19,6 +19,7 @@ async def index_repo(repo_id: str, files: List[Dict[str, str]], metadata: Dict[s
 
     # files: list of {filename, content}
     chunks = []
+
     for f in files:
         text = f['content']
         if not isinstance(text, str):
@@ -46,6 +47,13 @@ async def index_repo(repo_id: str, files: List[Dict[str, str]], metadata: Dict[s
             i = i + chunk_size - overlap
 
     logger.info(f"Total chunks created: {len(chunks)}")
+
+    # Ensure chunks are not empty before proceeding
+    if not chunks:
+        logger.warning("No chunks were created. Ensure input files are valid.")
+        return {"status": "error", "message": "No chunks created. Check input files."}
+
+    logger.debug(f"Chunks created: {chunks}")
 
     # 2. embed chunks in batches
     texts = [c['text'] for c in chunks]
@@ -89,19 +97,7 @@ async def index_repo(repo_id: str, files: List[Dict[str, str]], metadata: Dict[s
     save_index_metadata(repo_id, {'file_count': len(files), 'chunk_count': len(chunks), 'metadata': metadata})
 
     # Return summary
-    # free large intermediates to reduce memory footprint
-    try:
-        del embeddings
-        del vectors
-        del chunks
-        del merged_vectors
-        del existing
-        del existing_dict
-    except Exception:
-        pass
-    import gc
-    gc.collect()
-
+  
     return {
         'repo_id': repo_id,
         'file_count': len(files),
