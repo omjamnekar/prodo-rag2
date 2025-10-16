@@ -4,6 +4,7 @@ from typing import List
 import numpy as np
 import onnxruntime as ort
 from transformers import AutoTokenizer
+import gc
 
 # Load environment variables
 load_dotenv()
@@ -54,5 +55,19 @@ async def get_embeddings(texts: List[str]) -> List[np.ndarray]:
     sum_embeddings = np.sum(embeddings * attention_mask_expanded, axis=1)
     sum_mask = np.clip(attention_mask_expanded.sum(axis=1), a_min=1e-9, a_max=None)
     mean_pooled = sum_embeddings / sum_mask
+
+    # free large intermediates asap to reduce memory footprint
+    try:
+        del outputs
+        del embeddings
+        del attention_mask_expanded
+        del sum_embeddings
+        del sum_mask
+        del input_ids
+        del attention_mask
+        del inputs
+    except Exception:
+        pass
+    gc.collect()
 
     return mean_pooled

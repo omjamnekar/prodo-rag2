@@ -6,10 +6,15 @@ from flask import request, jsonify
 from service.piplines.rag_pipeline import process_rag, index_repo, reset_repo
 import traceback
 import asyncio
+from threading import Semaphore
 
 
 load_dotenv()
 app = Flask(__name__)
+
+# Limit concurrent heavy requests to avoid memory spikes. Default 2 concurrent.
+MAX_CONCURRENCY = int(os.environ.get('MAX_CONCURRENCY', '2'))
+_semaphore = Semaphore(MAX_CONCURRENCY)
 
 def convert_ndarray_to_list(obj):
     if isinstance(obj, np.ndarray):
@@ -48,6 +53,10 @@ def parse_query_request(data):
 @app.route('/rag/query', methods=['POST'])
 def rag_query():
     try:
+        # try to acquire semaphore quickly (avoid waiting indefinitely)
+        acquired = _semaphore.acquire(timeout=0.5)
+        if not acquired:
+            return jsonify({"error": "Too many concurrent requests"}), 429
         data = request.get_json(force=True)
         req = parse_query_request(data)
         # Call async function from sync Flask
@@ -58,6 +67,10 @@ def rag_query():
             safe_result = convert_ndarray_to_list(result)
             return jsonify(safe_result)
         finally:
+            try:
+                _semaphore.release()
+            except Exception:
+                pass
             loop.close()
     except Exception as e:
         print("Error in /rag/query:", e, flush=True)
@@ -68,6 +81,9 @@ def rag_query():
 @app.route('/rag/reset', methods=['POST'])
 def rag_reset():
     try:
+        acquired = _semaphore.acquire(timeout=0.5)
+        if not acquired:
+            return jsonify({"error": "Too many concurrent requests"}), 429
         data = request.get_json(force=True)
         req = parse_index_request(data)
         repo_id = req.get('repoId')
@@ -83,6 +99,10 @@ def rag_reset():
             result = loop.run_until_complete(reset_repo(repo_id, files, metadata)) # type: ignore
             return jsonify({"status": "reset", "repoId": repo_id, "result": result})
         finally:
+            try:
+                _semaphore.release()
+            except Exception:
+                pass
             loop.close()
     except Exception as e:
         tb = traceback.format_exc()
@@ -118,6 +138,9 @@ def health():
 @app.route('/rag/index', methods=['POST'])
 def index_repo_call():
     try:
+        acquired = _semaphore.acquire(timeout=0.5)
+        if not acquired:
+            return jsonify({"error": "Too many concurrent requests"}), 429
         data = request.get_json(force=True)
         print(f"Received data for /rag/index: {data}", flush=True)
         req = parse_index_request(data)
@@ -135,6 +158,10 @@ def index_repo_call():
             print(f"Indexing result for repoId {repo_id}: {result}", flush=True)
             return jsonify({"success": True, "result": result})
         finally:
+            try:
+                _semaphore.release()
+            except Exception:
+                pass
             loop.close()
     except Exception as e:
         tb = traceback.format_exc()
