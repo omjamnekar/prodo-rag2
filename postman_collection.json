@@ -34,12 +34,7 @@
       "name": "Index Repo",
       "request": {
         "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
         "body": {
           "mode": "raw",
           "raw": "{\n  \"repoId\": \"test-repo\",\n  \"files\": [\n    {\"filename\": \"test.py\", \"content\": \"print('Hello World')\"}\n  ],\n  \"metadata\": {}\n}"
@@ -52,6 +47,30 @@
       }
     },
     {
+      "name": "Reset Repo",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"repoId\": \"test-repo\",\n  \"files\": [\n    {\"filename\": \"test.py\", \"content\": \"print('Hello Updated')\"}\n  ],\n  \"metadata\": {}\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/rag/reset",
+          "host": ["{{base_url}}"],
+          "path": ["rag", "reset"]
+        }
+      },
+      "response": [
+        {
+          "name": "Reset Response",
+          "status": "OK",
+          "code": 200,
+          "_body": "{ \"status\": \"reset\", \"repoId\": \"test-repo\", \"result\": {\"status\": \"no-op\"} }"
+        }
+      ]
+    },
+    {
       "name": "Delete Repo Vectors",
       "request": {
         "method": "DELETE",
@@ -60,43 +79,23 @@
           "raw": "{{base_url}}/rag/delete?repoId={{repoId}}",
           "host": ["{{base_url}}"],
           "path": ["rag", "delete"],
-          "query": [
-            {
-              "key": "repoId",
-              "value": "{{repoId}}"
-            }
-          ]
+          "query": [{ "key": "repoId", "value": "{{repoId}}" }]
         }
-      }
-    },
-    {
-      "name": "Reset Repo",
-      "request": {
-        "method": "DELETE",
-        "header": [],
-        "url": {
-          "raw": "{{base_url}}/rag/reset?repoId={{repoId}}",
-          "host": ["{{base_url}}"],
-          "path": ["rag", "reset"],
-          "query": [
-            {
-              "key": "repoId",
-              "value": "{{repoId}}"
-            }
-          ]
+      },
+      "response": [
+        {
+          "name": "Delete Response",
+          "status": "OK",
+          "code": 200,
+          "_body": "{ \"status\": \"deleted\", \"repoId\": \"{{repoId}}\" }"
         }
-      }
+      ]
     },
     {
       "name": "RAG Query",
       "request": {
         "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
         "body": {
           "mode": "raw",
           "raw": "{\n  \"repoId\": \"test-repo\",\n  \"prompt\": \"Explain the following code and give improvements:\\nprint(\\\"Hello\\\")\",\n  \"top_k\": 6,\n  \"metadata\": {}\n}"

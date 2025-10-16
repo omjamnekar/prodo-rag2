@@ -65,19 +65,28 @@ def rag_query():
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
-@app.route('/rag/reset', methods=['DELETE'])
+@app.route('/rag/reset', methods=['POST'])
 def rag_reset():
     try:
-        repoId = request.args.get('repoId')
+        data = request.get_json(force=True)
+        req = parse_index_request(data)
+        repo_id = req.get('repoId')
+        files = req.get('files')
+        metadata = req.get('metadata', {})
+
+        if not repo_id:
+            return jsonify({"error": "repoId required"}), 400
+
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            loop.run_until_complete(reset_repo(repoId)) # type: ignore
-            return jsonify({"status": "reset", "repoId": repoId})
+            result = loop.run_until_complete(reset_repo(repo_id, files, metadata)) # type: ignore
+            return jsonify({"status": "reset", "repoId": repo_id, "result": result})
         finally:
             loop.close()
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        tb = traceback.format_exc()
+        return jsonify({"error": str(e), "traceback": tb}), 500
 
 
 # Delete all vectors for a repo (namespace)
@@ -90,9 +99,10 @@ def delete_repo_vectors():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            
-            loop.run_until_complete(reset_repo(repoId))
-            return jsonify({"status": "deleted", "repoId": repoId})
+            # call delete_repo which performs namespace deletion
+            from service.piplines.rag_pipeline import delete_repo
+            result = loop.run_until_complete(delete_repo(repoId))
+            return jsonify({"status": "deleted", "repoId": repoId, "result": result})
         finally:
             loop.close()
     except Exception as e:

@@ -146,6 +146,24 @@ JSON with fields: suggestions (list), insights (list), guidance (string)
         'raw_llm_output': raw
     }
 
-async def reset_repo(repo_id: str):
+async def reset_repo(repo_id: str, files: List[Dict[str, str]] | None = None, metadata: Dict[str, Any] | None = None):
+    """Reset (upsert) repository index.
+
+    If files are provided, this will upsert/update the existing index for the namespace
+    by calling `index_repo` (which merges new/updated chunks with existing vectors).
+    If no files are provided, the function is a no-op (keeps existing index intact).
+    """
+    if metadata is None:
+        metadata = {}
+    if files:
+        # Delegate to index_repo which handles merging/upserting with existing vectors
+        return await index_repo(repo_id, files, metadata)
+    # nothing to do
+    return {'status': 'no-op', 'repo_id': repo_id}
+
+
+async def delete_repo(repo_id: str):
+    """Delete all vectors for the given repo namespace."""
     delete_namespace(repo_id)
     # optionally remove metadata from DB (not implemented here)
+    return {'status': 'deleted', 'repo_id': repo_id}
