@@ -4,6 +4,9 @@ import numpy as np
 from dotenv import load_dotenv
 from flask import request, jsonify
 from service.piplines.rag_pipeline import process_rag, index_repo, reset_repo
+from service.worker.worker import IndexWorker
+from service.cache.query_cache import TTLCache
+import hashlib
 import traceback
 import asyncio
 from threading import Semaphore
@@ -15,6 +18,16 @@ app = Flask(__name__)
 # Limit concurrent heavy requests to avoid memory spikes. Default 2 concurrent.
 MAX_CONCURRENCY = int(os.environ.get('MAX_CONCURRENCY', '2'))
 _semaphore = Semaphore(MAX_CONCURRENCY)
+
+# optional background worker
+_background_index = os.environ.get('BACKGROUND_INDEX', 'false').lower() in ('1', 'true', 'yes')
+_worker: IndexWorker | None = None
+if _background_index:
+    _worker = IndexWorker(num_workers=int(os.environ.get('INDEX_WORKERS', '1')))
+    _worker.start()
+
+# query cache
+_query_cache = TTLCache(ttl_seconds=int(os.environ.get('QUERY_CACHE_TTL', '300')), max_items=int(os.environ.get('QUERY_CACHE_ITEMS', '1024')))
 
 def convert_ndarray_to_list(obj):
     if isinstance(obj, np.ndarray):
@@ -63,7 +76,17 @@ def rag_query():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            result = loop.run_until_complete(process_rag(req["repoId"], req["prompt"], req["top_k"], req["metadata"]))
+            # check query cache
+            cache_key = hashlib.sha256((req["repoId"] + '||' + req["prompt"] + '||' + str(req["top_k"])).encode('utf-8')).hexdigest()
+            cached = _query_cache.get(cache_key)
+            if cached:
+                result = cached
+            else:
+                result = loop.run_until_complete(process_rag(req["repoId"], req["prompt"], req["top_k"], req["metadata"]))
+                try:
+                    _query_cache.set(cache_key, result)
+                except Exception:
+                    pass
             safe_result = convert_ndarray_to_list(result)
             return jsonify(safe_result)
         finally:
@@ -150,6 +173,17 @@ def index_repo_call():
 
         if not repo_id or not files or not isinstance(files, list):
             raise ValueError("Missing or invalid repoId/files in request.")
+
+        # If background indexing is enabled, enqueue and return job id
+        if _worker:
+            try:
+                job_id = _worker.submit(repo_id, files, metadata)
+                return jsonify({"success": True, "job_id": job_id, "background": True})
+            finally:
+                try:
+                    _semaphore.release()
+                except Exception:
+                    pass
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
